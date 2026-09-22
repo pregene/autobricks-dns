@@ -1,6 +1,6 @@
 [package]
 name = "autobricks-dns"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Standalone DNS service for Autobricks internal names"
 license = "GPL-3.0-only"
