@@ -1,5 +1,9 @@
 # Installation and Operations
 
+For an Ubuntu 22.04 amd64 or arm64 `.deb`, including build, install, upgrade, remove,
+and purge instructions, see [packaging/README.md](packaging/README.md).
+The sections below describe manual installation without a package manager.
+
 This guide installs Autobricks DNS on a Linux host running `systemd`. The
 service provides local A and AAAA overrides for intranet or isolated-network
 names and forwards all unregistered names to the configured upstream DNS

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+# --no-start also suppresses debhelper's stop snippet on Ubuntu 22.04.
+# Stop explicitly on removal; leave upgrades running until postinst restarts.
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke stop autobricks-dns.service || true
+fi
+
+#DEBHELPER#

@@ -1,0 +1,16 @@
+Source: autobricks-dns
+Section: net
+Priority: optional
+Maintainer: Autobricks, Co. <paulcho@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Rules-Requires-Root: no
+Homepage: https://github.com/pregene/autobricks-dns
+
+Package: autobricks-dns
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser, init-system-helpers (>= 1.54~), systemd
+Description: Lightweight internal DNS override and forwarding service
+ Serves configured A and AAAA records and forwards other names to an upstream
+ DNS server. Includes a local Unix-socket management CLI and a systemd unit.
+ Configure the service before explicitly enabling and starting it.

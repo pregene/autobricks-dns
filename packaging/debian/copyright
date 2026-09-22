@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: autobricks-dns
+Source: https://github.com/pregene/autobricks-dns
+
+Files: *
+Copyright: 2026 Autobricks, Co.
+License: GPL-3
+ This program is licensed under the GNU General Public License version 3 only.
+ On Debian and Ubuntu systems, the full license text is available at
+ /usr/share/common-licenses/GPL-3.

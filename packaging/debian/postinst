@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+if [ "$1" = configure ]; then
+    if ! getent group autobricks-dns >/dev/null; then
+        addgroup --system autobricks-dns
+    fi
+    if ! getent passwd autobricks-dns >/dev/null; then
+        adduser --system --ingroup autobricks-dns --no-create-home \
+            --home /nonexistent --shell /usr/sbin/nologin autobricks-dns
+    fi
+    install -d -o autobricks-dns -g autobricks-dns -m 0750 /etc/autobricks-dns
+    if [ ! -e /etc/autobricks-dns/autobricks-dns.ini ]; then
+        install -o autobricks-dns -g autobricks-dns -m 0600 \
+            /usr/share/autobricks-dns/default.ini /etc/autobricks-dns/autobricks-dns.ini
+    fi
+fi
+
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload || true
+    fi
+    # Keep an already-running installation on the new executable after upgrade.
+    # Do not start an inactive or newly installed DNS server.
+    if [ -n "${2:-}" ] && [ -d /run/systemd/system ]; then
+        deb-systemd-invoke try-restart autobricks-dns.service || true
+    fi
+    echo 'Autobricks DNS: edit /etc/autobricks-dns/autobricks-dns.ini, then run:'
+    echo '  sudo systemctl enable --now autobricks-dns.service'
+fi

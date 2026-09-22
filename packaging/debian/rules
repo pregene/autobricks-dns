@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	cargo build --release --locked
+
+override_dh_auto_test:
+	cargo test --locked
+
+override_dh_auto_install:
+	install -D -m 0755 target/release/autobricks-dns debian/autobricks-dns/usr/bin/autobricks-dns
+	install -D -m 0644 config/autobricks-dns.ini debian/autobricks-dns/usr/share/autobricks-dns/default.ini
+	install -D -m 0644 packaging/README.md debian/autobricks-dns/usr/share/doc/autobricks-dns/README.Debian
+
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade
+
+override_dh_auto_clean:
