@@ -125,4 +125,4 @@ cargo clippy --all-targets -- -D warnings
 Copyright 2026 Autobricks, Co.
 
 This project is licensed under the GNU General Public License v3.0 only. See
-[COPYING](COPYING) for the full license text.
+[LICENSE](LICENSE) for the full license text.
