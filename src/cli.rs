@@ -8,6 +8,7 @@ pub enum Mode {
 }
 
 pub enum Command {
+    Help,
     List,
     Add(DnsRecord),
     Delete { name: String },
@@ -32,8 +33,8 @@ pub fn parse() -> io::Result<Mode> {
         "delete" => Ok(Mode::Command(Command::Delete {
             name: required(&arguments, "--name")?,
         })),
-        "help" | "--help" | "-h" => Err(usage()),
-        _ => Err(usage()),
+        "help" | "--help" | "-h" => Ok(Mode::Command(Command::Help)),
+        _ => Err(io::Error::other(usage())),
     }
 }
 
@@ -56,14 +57,13 @@ fn record_type(value: &str) -> io::Result<RecordType> {
     }
 }
 
-fn usage() -> io::Error {
-    io::Error::other(
-        "usage:\n  autobricks-dns\n  autobricks-dns list\n  autobricks-dns add --name <name> --ip <address> --type <A|AAAA>\n  autobricks-dns delete --name <name>\n  autobricks-dns restart",
-    )
+fn usage() -> &'static str {
+    "usage:\n  autobricks-dns\n  autobricks-dns list\n  autobricks-dns add --name <name> --ip <address> --type <A|AAAA>\n  autobricks-dns delete --name <name>\n  autobricks-dns restart\n  autobricks-dns --help | -h | help"
 }
 
 pub fn execute(command: Command) -> io::Result<()> {
     match command {
+        Command::Help => println!("{}", usage()),
         Command::List => {
             let records = crate::control::list()?;
             println!(

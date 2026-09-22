@@ -1,4 +1,4 @@
-use crate::config::{DnsRecord, RecordType};
+use crate::config::DnsRecord;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -241,7 +241,7 @@ fn write_response(stream: &mut UnixStream, response: Response) -> io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DnsConfig;
+    use crate::config::{DnsConfig, RecordType};
     use std::net::{IpAddr, Ipv4Addr};
 
     fn fixture() -> io::Result<(PathBuf, DnsConfig)> {
