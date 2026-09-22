@@ -58,7 +58,51 @@ fn record_type(value: &str) -> io::Result<RecordType> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  autobricks-dns\n  autobricks-dns list\n  autobricks-dns add --name <name> --ip <address> --type <A|AAAA>\n  autobricks-dns delete --name <name>\n  autobricks-dns restart\n  autobricks-dns --help | -h | help"
+    concat!(
+        "Autobricks DNS ",
+        env!("AUTOBRICKS_PRODUCT_VERSION"),
+        r#"
+Serve configured internal A/AAAA records and forward other names to upstream DNS.
+
+Usage:
+  autobricks-dns
+  autobricks-dns <command> [options]
+
+Commands:
+  (no command)  Start the DNS service using the INI configuration.
+  list          Print configured records as JSON.
+  add           Add an A or AAAA record (requires --name, --ip, and --type).
+  delete        Delete all A and AAAA records for a name (requires --name).
+  restart       Request a clean service exit; a service manager must restart it.
+  help          Show this help. Aliases: --help, -h.
+
+Record options:
+  --name <name>      Exact DNS name, matched case-insensitively; no wildcards.
+  --ip <address>     IPv4 address for A, or IPv6 address for AAAA.
+  --type <A|AAAA>    Record type. Other local record types are not supported.
+
+Environment:
+  AUTOBRICKS_DNS_CONFIG  INI file path used when starting the service.
+                        Default: config/autobricks-dns.ini (relative to cwd).
+  AUTOBRICKS_DNS_SOCKET  Unix control socket path for the service and commands.
+                        Default: /run/autobricks-dns/autobricks-dns.sock
+
+Examples:
+  autobricks-dns
+  autobricks-dns list
+  autobricks-dns add --name api.example.internal --ip 10.10.0.10 --type A
+  autobricks-dns add --name api.example.internal --ip fd00::10 --type AAAA
+  autobricks-dns delete --name api.example.internal
+  autobricks-dns restart
+
+Notes:
+  Management commands require a running service and access to its control socket.
+  Add/delete save the configuration; restart the service to apply DNS changes.
+  Adding the same name/type/IP is a no-op; a different IP is rejected.
+  Without a service manager, start the service manually after restart exits.
+  Clients must use this server as their DNS resolver to receive local overrides.
+  See README.md for configuration and INSTALL.md for service installation."#,
+    )
 }
 
 pub fn execute(command: Command) -> io::Result<()> {
