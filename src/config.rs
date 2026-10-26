@@ -1,12 +1,13 @@
 use ini::Ini;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-const DEFAULT_CONFIG: &str = "config/autobricks-dns.ini";
+const DEFAULT_CONFIG: &str = "/etc/autobricks/dns/autobricks-dns.ini";
+const DEFAULT_STATE: &str = "/var/lib/autobricks/dns/records.ini";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -49,44 +50,38 @@ impl RecordType {
 }
 
 pub fn load() -> io::Result<(PathBuf, DnsConfig)> {
-    let path = std::env::var_os("AUTOBRICKS_DNS_CONFIG")
+    let config_path = std::env::var_os("AUTOBRICKS_DNS_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
-    let configuration = load_path(&path)?;
-    Ok((path, configuration))
+    let state_path = std::env::var_os("AUTOBRICKS_DNS_STATE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE));
+    let (bind, upstream) = load_server(&config_path)?;
+    let records = load_records(&state_path)?;
+    Ok((
+        state_path,
+        DnsConfig {
+            bind,
+            upstream,
+            records,
+        },
+    ))
 }
 
-pub fn load_path(path: &Path) -> io::Result<DnsConfig> {
-    let mut configuration = parse_ini(&fs::read_to_string(path)?)?;
-    validate(&mut configuration)?;
-    Ok(configuration)
-}
-
-pub fn save(path: &Path, configuration: &mut DnsConfig) -> io::Result<()> {
-    validate(configuration)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("DNS configuration parent is missing"))?;
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| io::Error::other("DNS configuration filename is invalid"))?;
-    let temporary = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
-    let result = write_atomic(&temporary, path, encode_ini(configuration).as_bytes());
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
-fn parse_ini(source: &str) -> io::Result<DnsConfig> {
-    let document = Ini::load_from_str(source).map_err(io::Error::other)?;
+fn load_server(path: &Path) -> io::Result<(SocketAddr, Option<SocketAddr>)> {
+    let document = Ini::load_from_file(path).map_err(io::Error::other)?;
     let server = document
         .section(Some("server"))
         .ok_or_else(|| io::Error::other("DNS INI configuration requires a [server] section"))?;
-    if server.iter().any(|(key, _)| key != "bind" && key != "upstream") {
+    if document
+        .iter()
+        .any(|(section, properties)| section != Some("server") && !properties.is_empty())
+        || server
+            .iter()
+            .any(|(key, _)| key != "bind" && key != "upstream")
+    {
         return Err(io::Error::other(
-            "DNS [server] section contains an unknown key",
+            "DNS service configuration only accepts bind and upstream in [server]",
         ));
     }
     let bind = server
@@ -103,65 +98,84 @@ fn parse_ini(source: &str) -> io::Result<DnsConfig> {
                 .map_err(|error| io::Error::other(format!("invalid DNS upstream address: {error}")))
         })
         .transpose()?;
+    if upstream == Some(bind) {
+        return Err(io::Error::other(
+            "DNS upstream must not point to the DNS service bind",
+        ));
+    }
+    Ok((bind, upstream))
+}
+
+pub fn load_records(path: &Path) -> io::Result<Vec<DnsRecord>> {
+    let document = Ini::load_from_file(path).map_err(io::Error::other)?;
     let mut records = Vec::new();
-    for (section, properties) in document.iter() {
-        let Some(section) = section else {
+    for (section, properties) in &document {
+        let Some(name) = section else {
             if properties.is_empty() {
                 continue;
             }
             return Err(io::Error::other(
-                "DNS INI configuration does not allow top-level keys",
+                "DNS record state does not allow top-level keys",
             ));
         };
-        if section == "server" {
-            continue;
-        }
         for (record_type, value) in properties {
             let record_type = match record_type {
                 "A" => RecordType::A,
                 "AAAA" => RecordType::Aaaa,
                 _ => {
                     return Err(io::Error::other(format!(
-                        "DNS INI section [{section}] only accepts A and AAAA keys"
+                        "DNS record section [{name}] only accepts A and AAAA keys"
                     )));
                 }
             };
-            let ip = value
-                .parse()
-                .map_err(|error| io::Error::other(format!("invalid DNS record IP: {error}")))?;
             records.push(DnsRecord {
-                name: section.to_owned(),
+                name: name.to_owned(),
                 record_type,
-                ip,
+                ip: value
+                    .parse()
+                    .map_err(|error| io::Error::other(format!("invalid DNS record IP: {error}")))?,
             });
         }
     }
-    Ok(DnsConfig {
-        bind,
-        upstream,
-        records,
-    })
+    validate_records(&mut records)?;
+    Ok(records)
 }
 
-fn encode_ini(configuration: &DnsConfig) -> String {
-    let mut output = format!("[server]\nbind = {}\n", configuration.bind);
-    if let Some(upstream) = configuration.upstream {
-        output.push_str(&format!("upstream = {upstream}\n"));
-    }
-    let mut records_by_name = BTreeMap::new();
-    for record in &configuration.records {
-        records_by_name
-            .entry(record.name.as_str())
-            .or_insert_with(Vec::new)
-            .push(record);
-    }
-    for (name, records) in records_by_name {
-        output.push_str(&format!("\n[{name}]\n"));
-        for record in records {
-            output.push_str(&format!("{} = {}\n", record.record_type.ini_name(), record.ip));
+pub fn save_records(path: &Path, records: &mut [DnsRecord]) -> io::Result<()> {
+    validate_records(records)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("DNS state parent is missing"))?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| io::Error::other("DNS state filename is invalid"))?;
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    let mut ordered = records.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        (left.name.as_str(), left.record_type).cmp(&(right.name.as_str(), right.record_type))
+    });
+    let mut output = String::new();
+    let mut current = None;
+    for record in ordered {
+        if current != Some(record.name.as_str()) {
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str(&format!("[{}]\n", record.name));
+            current = Some(record.name.as_str());
         }
+        output.push_str(&format!(
+            "{} = {}\n",
+            record.record_type.ini_name(),
+            record.ip
+        ));
     }
-    output
+    let result = write_atomic(&temporary, path, output.as_bytes());
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(unix)]
@@ -175,13 +189,12 @@ fn write_atomic(temporary: &Path, destination: &Path, bytes: &[u8]) -> io::Resul
         .mode(0o600)
         .open(temporary)?;
     file.write_all(bytes)?;
-    file.write_all(b"\n")?;
     file.sync_all()?;
     fs::rename(temporary, destination)?;
     fs::File::open(
         destination
             .parent()
-            .ok_or_else(|| io::Error::other("DNS configuration parent is missing"))?,
+            .ok_or_else(|| io::Error::other("DNS state parent is missing"))?,
     )?
     .sync_all()
 }
@@ -189,18 +202,13 @@ fn write_atomic(temporary: &Path, destination: &Path, bytes: &[u8]) -> io::Resul
 #[cfg(not(unix))]
 fn write_atomic(_temporary: &Path, _destination: &Path, _bytes: &[u8]) -> io::Result<()> {
     Err(io::Error::other(
-        "atomic DNS configuration storage is unavailable on this platform",
+        "atomic DNS record storage is unavailable on this platform",
     ))
 }
 
-pub(crate) fn validate(configuration: &mut DnsConfig) -> io::Result<()> {
-    if configuration.upstream == Some(configuration.bind) {
-        return Err(io::Error::other(
-            "DNS upstream must not point to the DNS service bind",
-        ));
-    }
+pub(crate) fn validate_records(records: &mut [DnsRecord]) -> io::Result<()> {
     let mut names = BTreeSet::new();
-    for record in &mut configuration.records {
+    for record in records {
         record.name.make_ascii_lowercase();
         if !valid_name(&record.name) {
             return Err(io::Error::other(format!(
@@ -246,93 +254,85 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
 
-    fn configuration() -> Result<DnsConfig, String> {
-        Ok(DnsConfig {
-            bind: "127.0.0.1:5353"
-                .parse()
-                .map_err(|error| format!("invalid test bind: {error}"))?,
-            upstream: Some(
-                "8.8.8.8:53"
-                    .parse()
-                    .map_err(|error| format!("invalid test upstream: {error}"))?,
-            ),
-            records: vec![DnsRecord {
-                name: "PKI.AUTOBRICKS.INTERNAL".to_owned(),
-                record_type: RecordType::A,
-                ip: IpAddr::V4(Ipv4Addr::new(10, 10, 254, 2)),
-            }],
-        })
-    }
-
-    #[test]
-    fn normalizes_and_accepts_exact_records() -> Result<(), String> {
-        let mut value = configuration()?;
-        validate(&mut value).map_err(|error| error.to_string())?;
-        let name = value
-            .records
-            .first()
-            .map(|record| record.name.as_str())
-            .ok_or_else(|| "normalized test record is missing".to_owned())?;
-        assert_eq!(name, "pki.autobricks.internal");
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_duplicate_records() -> Result<(), String> {
-        let mut value = configuration()?;
-        value.records.push(DnsRecord {
-            name: "pki.autobricks.internal".to_owned(),
+    fn record() -> DnsRecord {
+        DnsRecord {
+            name: "PKI.AUTOBRICKS.INTERNAL".to_owned(),
             record_type: RecordType::A,
-            ip: IpAddr::V4(Ipv4Addr::new(10, 10, 254, 3)),
-        });
-        assert!(validate(&mut value).is_err());
-        Ok(())
+            ip: IpAddr::V4(Ipv4Addr::new(10, 10, 254, 2)),
+        }
+    }
+
+    fn fixture(name: &str, value: &str) -> io::Result<PathBuf> {
+        let directory = std::env::temp_dir().join(format!(
+            "autobricks-dns-config-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(&directory)?;
+        let path = directory.join(name);
+        fs::write(&path, value)?;
+        Ok(path)
     }
 
     #[test]
-    fn parses_ini_configuration() -> Result<(), String> {
-        let mut value = parse_ini(
-            "[server]\nbind = 127.0.0.1:5353\nupstream = 8.8.8.8:53\n\
-             \n[PKI.AUTOBRICKS.INTERNAL]\nA = 10.10.254.2\nAAAA = fd00::2\n",
+    fn server_configuration_and_record_state_are_separate() -> io::Result<()> {
+        let config = fixture(
+            "autobricks-dns.ini",
+            "[server]\nbind = 127.0.0.1:5353\nupstream = 8.8.8.8:53\n",
+        )?;
+        let state = fixture(
+            "records.ini",
+            "[PKI.AUTOBRICKS.INTERNAL]\nA = 10.10.254.2\nAAAA = fd00::2\n",
+        )?;
+        let (bind, upstream) = load_server(&config)?;
+        let records = load_records(&state)?;
+        assert_eq!(bind, "127.0.0.1:5353".parse().map_err(io::Error::other)?);
+        assert_eq!(
+            upstream,
+            Some("8.8.8.8:53".parse().map_err(io::Error::other)?)
+        );
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records.first().map(|record| record.name.as_str()),
+            Some("pki.autobricks.internal")
+        );
+        fs::remove_dir_all(
+            config
+                .parent()
+                .ok_or_else(|| io::Error::other("missing parent"))?,
         )
-        .map_err(|error| error.to_string())?;
-        validate(&mut value).map_err(|error| error.to_string())?;
-        assert_eq!(value.records.len(), 2);
-        assert_eq!(value.records[0].name, "pki.autobricks.internal");
-        assert_eq!(value.records[1].record_type, RecordType::Aaaa);
-        Ok(())
     }
 
     #[test]
-    fn rejects_unknown_ini_configuration_keys() {
-        let ini = "[server]\nbind = 127.0.0.1:5353\nunexpected = true\n\
-                   \n[pki.autobricks.internal]\nCNAME = target.autobricks.internal\n";
-        assert!(parse_ini(ini).is_err());
+    fn rejects_records_in_service_configuration() -> io::Result<()> {
+        let path = fixture(
+            "invalid.ini",
+            "[server]\nbind = 127.0.0.1:5353\n\n[pki.internal]\nA = 10.0.0.1\n",
+        )?;
+        assert!(load_server(&path).is_err());
+        fs::remove_dir_all(
+            path.parent()
+                .ok_or_else(|| io::Error::other("missing parent"))?,
+        )
     }
 
     #[test]
-    fn rejects_record_type_and_ip_mismatch() -> Result<(), String> {
-        let mut value = configuration()?;
-        let record = value
-            .records
-            .first_mut()
-            .ok_or_else(|| "test record is missing".to_owned())?;
-        record.record_type = RecordType::Aaaa;
-        assert!(validate(&mut value).is_err());
-        Ok(())
+    fn normalizes_and_rejects_duplicate_records() {
+        let mut records = vec![record()];
+        assert!(validate_records(&mut records).is_ok());
+        assert_eq!(
+            records.first().map(|record| record.name.as_str()),
+            Some("pki.autobricks.internal")
+        );
+        records.push(record());
+        assert!(validate_records(&mut records).is_err());
     }
 
     #[test]
-    fn accepts_configuration_without_upstream() -> Result<(), String> {
-        let mut value = configuration()?;
-        value.upstream = None;
-        validate(&mut value).map_err(|error| error.to_string())
-    }
-
-    #[test]
-    fn accepts_configuration_without_local_records() -> Result<(), String> {
-        let mut value = configuration()?;
-        value.records.clear();
-        validate(&mut value).map_err(|error| error.to_string())
+    fn rejects_record_type_and_ip_mismatch() {
+        let mut invalid = record();
+        invalid.record_type = RecordType::Aaaa;
+        let mut records = vec![invalid];
+        assert!(validate_records(&mut records).is_err());
     }
 }

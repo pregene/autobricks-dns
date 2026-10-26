@@ -18,4 +18,5 @@ fn valid_version(version: &str) -> bool {
         && fields
             .iter()
             .all(|field| !field.is_empty() && field.chars().all(|value| value.is_ascii_digit()))
+        && fields.get(2).is_some_and(|build| *build != "0")
 }

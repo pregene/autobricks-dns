@@ -43,24 +43,34 @@ The release executable is `target/release/autobricks-dns`.
 
 ## 3. Create the Service Account and Files
 
-Create a dedicated system account and the configuration directory. The service
-must be able to modify its INI file when `add` or `delete` is used.
+Create a dedicated system account, canonical configuration root, executable
+directory, mutable state directory, and shared runtime socket directory.
 
 ```sh
 sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin autobricks-dns
-sudo install -d -o autobricks-dns -g autobricks-dns -m 0750 /etc/autobricks-dns
-sudo install -o root -g root -m 0755 target/release/autobricks-dns /usr/local/bin/autobricks-dns
+sudo install -d -o root -g autobricks-dns -m 0750 /etc/autobricks/dns
+sudo install -d -o root -g root -m 0755 /usr/bin/autobricks
+sudo install -d -o autobricks-dns -g autobricks-dns -m 0750 /var/lib/autobricks/dns
+sudo install -d -o root -g root -m 1777 /var/run/autobricks
+sudo install -o root -g root -m 0755 target/release/autobricks-dns /usr/bin/autobricks/autobricks-dns
+sudo ln -s autobricks/autobricks-dns /usr/bin/autobricks-dns
+sudo install -o root -g autobricks-dns -m 0640 \
+  config/autobricks-dns.ini /etc/autobricks/dns/autobricks-dns.ini
 sudo install -o autobricks-dns -g autobricks-dns -m 0600 \
-  config/autobricks-dns.ini /etc/autobricks-dns/autobricks-dns.ini
+  config/records.ini /var/lib/autobricks/dns/records.ini
 ```
 
-Edit `/etc/autobricks-dns/autobricks-dns.ini` before starting the service.
+Edit `/etc/autobricks/dns/autobricks-dns.ini` before starting the service.
 
 ```ini
 [server]
 bind = 0.0.0.0:53
 upstream = 8.8.8.8:53
+```
 
+Initial local records belong in `/var/lib/autobricks/dns/records.ini`:
+
+```ini
 [api.example.internal]
 A = 10.10.0.10
 AAAA = fd00::10
@@ -86,9 +96,11 @@ StartLimitBurst=5
 Type=simple
 User=autobricks-dns
 Group=autobricks-dns
-Environment=AUTOBRICKS_DNS_CONFIG=/etc/autobricks-dns/autobricks-dns.ini
-Environment=AUTOBRICKS_DNS_SOCKET=/run/autobricks-dns/autobricks-dns.sock
-ExecStart=/usr/local/bin/autobricks-dns
+Environment=AUTOBRICKS_DNS_CONFIG=/etc/autobricks/dns/autobricks-dns.ini
+Environment=AUTOBRICKS_DNS_STATE=/var/lib/autobricks/dns/records.ini
+Environment=AUTOBRICKS_DNS_SOCKET=/var/run/autobricks/dns.sock
+ExecStartPre=+/usr/bin/install -d -o root -g root -m 1777 /var/run/autobricks
+ExecStart=/usr/bin/autobricks/autobricks-dns
 Restart=always
 RestartSec=0
 
@@ -97,9 +109,7 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 
-RuntimeDirectory=autobricks-dns
-RuntimeDirectoryMode=0750
-ReadWritePaths=/etc/autobricks-dns
+ReadWritePaths=/var/lib/autobricks/dns /var/run/autobricks
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
@@ -195,7 +205,8 @@ autobricks-dns restart
 `list` writes the configured records as JSON. `add` accepts only `A` and
 `AAAA`. `delete` removes every local A and AAAA record for the supplied name.
 The service writes changes atomically to
-`/etc/autobricks-dns/autobricks-dns.ini`.
+`/var/lib/autobricks/dns/records.ini`. Its configuration under `/etc` remains
+read-only to the service.
 
 ## 8. Monitor and Troubleshoot
 
@@ -210,8 +221,9 @@ Common checks:
 
 ```sh
 sudo ss -ulpn 'sport = :53'
-sudo ls -l /run/autobricks-dns/autobricks-dns.sock
-sudo cat /etc/autobricks-dns/autobricks-dns.ini
+sudo ls -l /var/run/autobricks/dns.sock
+sudo cat /etc/autobricks/dns/autobricks-dns.ini
+sudo cat /var/lib/autobricks/dns/records.ini
 ```
 
 If a management command reports a socket connection error, confirm that the
@@ -227,6 +239,6 @@ service:
 git pull --ff-only
 cargo test --locked
 cargo build --release --locked
-sudo install -o root -g root -m 0755 target/release/autobricks-dns /usr/local/bin/autobricks-dns
+sudo install -o root -g root -m 0755 target/release/autobricks-dns /usr/bin/autobricks/autobricks-dns
 sudo systemctl restart autobricks-dns.service
 ```

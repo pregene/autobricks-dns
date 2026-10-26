@@ -11,19 +11,15 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-const DEFAULT_SOCKET: &str = "/run/autobricks-dns/autobricks-dns.sock";
+const DEFAULT_SOCKET: &str = "/var/run/autobricks/dns.sock";
 const MAX_FRAME: u64 = 1024 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, tag = "command", rename_all = "UPPERCASE")]
 enum Request {
     List,
-    Add {
-        record: DnsRecord,
-    },
-    Delete {
-        name: String,
-    },
+    Add { record: DnsRecord },
+    Delete { name: String },
     Restart,
 }
 
@@ -80,10 +76,7 @@ fn ensure_success(response: Response) -> io::Result<()> {
     }
 }
 
-pub fn start(
-    config_path: PathBuf,
-    stop: Arc<AtomicBool>,
-) -> io::Result<JoinHandle<io::Result<()>>> {
+pub fn start(state_path: PathBuf, stop: Arc<AtomicBool>) -> io::Result<JoinHandle<io::Result<()>>> {
     let socket_path = socket_path();
     prepare_socket(&socket_path)?;
     let listener = UnixListener::bind(&socket_path)?;
@@ -91,7 +84,7 @@ pub fn start(
     listener.set_nonblocking(true)?;
     thread::Builder::new()
         .name("autobricks-dns-control".to_owned())
-        .spawn(move || serve(listener, &socket_path, &config_path, stop))
+        .spawn(move || serve(listener, &socket_path, &state_path, stop))
 }
 
 fn socket_path() -> PathBuf {
@@ -114,13 +107,13 @@ fn prepare_socket(path: &Path) -> io::Result<()> {
 fn serve(
     listener: UnixListener,
     socket_path: &Path,
-    config_path: &Path,
+    state_path: &Path,
     stop: Arc<AtomicBool>,
 ) -> io::Result<()> {
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Err(error) = handle(stream, config_path, &stop) {
+                if let Err(error) = handle(stream, state_path, &stop) {
                     eprintln!("DNS_CONTROL_FAILURE reason={error}");
                 }
             }
@@ -139,7 +132,7 @@ fn serve(
     }
 }
 
-fn handle(mut stream: UnixStream, config_path: &Path, stop: &AtomicBool) -> io::Result<()> {
+fn handle(mut stream: UnixStream, state_path: &Path, stop: &AtomicBool) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut frame = String::new();
@@ -158,25 +151,25 @@ fn handle(mut stream: UnixStream, config_path: &Path, stop: &AtomicBool) -> io::
         );
     }
     let request = serde_json::from_str::<Request>(frame.trim_end()).map_err(io::Error::other)?;
-    let response = apply(config_path, request, stop);
+    let response = apply(state_path, request, stop);
     write_response(&mut stream, response)?;
     stream.shutdown(Shutdown::Both)
 }
 
-fn apply(config_path: &Path, request: Request, stop: &AtomicBool) -> Response {
-    match apply_inner(config_path, request, stop) {
+fn apply(state_path: &Path, request: Request, stop: &AtomicBool) -> Response {
+    match apply_inner(state_path, request, stop) {
         Ok(response) => response,
         Err(error) => error_response("FAILED", &error.to_string()),
     }
 }
 
-fn apply_inner(config_path: &Path, request: Request, stop: &AtomicBool) -> io::Result<Response> {
-    let mut configuration = crate::config::load_path(config_path)?;
+fn apply_inner(state_path: &Path, request: Request, stop: &AtomicBool) -> io::Result<Response> {
+    let mut records = crate::config::load_records(state_path)?;
     match request {
-        Request::List => Ok(success("LISTED", Some(configuration.records))),
+        Request::List => Ok(success("LISTED", Some(records))),
         Request::Add { mut record } => {
             record.name.make_ascii_lowercase();
-            let existing = configuration.records.iter().find(|value| {
+            let existing = records.iter().find(|value| {
                 value.name.eq_ignore_ascii_case(&record.name)
                     && value.record_type == record.record_type
             });
@@ -189,22 +182,18 @@ fn apply_inner(config_path: &Path, request: Request, stop: &AtomicBool) -> io::R
                     "record name and type already exist with a different IP",
                 ));
             }
-            configuration.records.push(record);
-            crate::config::save(config_path, &mut configuration)?;
+            records.push(record);
+            crate::config::save_records(state_path, &mut records)?;
             Ok(success("ADDED", None))
         }
-        Request::Delete {
-            mut name,
-        } => {
+        Request::Delete { mut name } => {
             name.make_ascii_lowercase();
-            let before = configuration.records.len();
-            configuration
-                .records
-                .retain(|record| record.name != name);
-            if configuration.records.len() == before {
+            let before = records.len();
+            records.retain(|record| record.name != name);
+            if records.len() == before {
                 return Ok(error_response("NOT_FOUND", "record does not exist"));
             }
-            crate::config::save(config_path, &mut configuration)?;
+            crate::config::save_records(state_path, &mut records)?;
             Ok(success("DELETED", None))
         }
         Request::Restart => {
@@ -241,33 +230,29 @@ fn write_response(stream: &mut UnixStream, response: Response) -> io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DnsConfig, RecordType};
+    use crate::config::RecordType;
     use std::net::{IpAddr, Ipv4Addr};
 
-    fn fixture() -> io::Result<(PathBuf, DnsConfig)> {
+    fn fixture() -> io::Result<PathBuf> {
         let directory = std::env::temp_dir().join(format!(
             "autobricks-dns-control-{}-{:?}",
             std::process::id(),
             thread::current().id()
         ));
         fs::create_dir_all(&directory)?;
-        let path = directory.join("autobricks-dns.json");
-        let mut configuration = DnsConfig {
-            bind: "127.0.0.1:5353".parse().map_err(io::Error::other)?,
-            upstream: None,
-            records: vec![DnsRecord {
-                name: "pki.autobricks.internal".to_owned(),
-                record_type: RecordType::A,
-                ip: IpAddr::V4(Ipv4Addr::new(10, 10, 254, 1)),
-            }],
-        };
-        crate::config::save(&path, &mut configuration)?;
-        Ok((path, configuration))
+        let path = directory.join("records.ini");
+        let mut records = vec![DnsRecord {
+            name: "pki.autobricks.internal".to_owned(),
+            record_type: RecordType::A,
+            ip: IpAddr::V4(Ipv4Addr::new(10, 10, 254, 1)),
+        }];
+        crate::config::save_records(&path, &mut records)?;
+        Ok(path)
     }
 
     #[test]
     fn add_and_delete_persist_configuration() -> io::Result<()> {
-        let (path, _) = fixture()?;
+        let path = fixture()?;
         let stop = AtomicBool::new(false);
         let record = DnsRecord {
             name: "CADDY.AUTOBRICKS.INTERNAL".to_owned(),
@@ -278,8 +263,7 @@ mod tests {
             apply_inner(&path, Request::Add { record }, &stop)?.result,
             "ADDED"
         );
-        assert!(crate::config::load_path(&path)?
-            .records
+        assert!(crate::config::load_records(&path)?
             .iter()
             .any(|value| value.name == "caddy.autobricks.internal"));
         assert_eq!(
@@ -293,8 +277,7 @@ mod tests {
             .result,
             "DELETED"
         );
-        assert!(!crate::config::load_path(&path)?
-            .records
+        assert!(!crate::config::load_records(&path)?
             .iter()
             .any(|value| value.name == "caddy.autobricks.internal"));
         fs::remove_dir_all(
@@ -305,7 +288,7 @@ mod tests {
 
     #[test]
     fn restart_sets_stop_after_response_is_prepared() -> io::Result<()> {
-        let (path, _) = fixture()?;
+        let path = fixture()?;
         let stop = AtomicBool::new(false);
         assert_eq!(
             apply_inner(&path, Request::Restart, &stop)?.result,

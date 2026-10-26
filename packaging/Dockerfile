@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:22.04 AS toolchain
+ARG UBUNTU_VERSION=22.04
+FROM ubuntu:${UBUNTU_VERSION} AS toolchain
 ARG DEBIAN_FRONTEND=noninteractive
 ARG RUST_VERSION=1.85.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,7 +23,7 @@ RUN chmod 0755 debian/rules debian/postinst debian/prerm debian/postrm \
     && mkdir /artifacts \
     && cp /work/*.deb /artifacts/
 
-FROM ubuntu:22.04 AS verified
+FROM ubuntu:${UBUNTU_VERSION} AS verified
 COPY --from=builder /artifacts/ /artifacts/
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

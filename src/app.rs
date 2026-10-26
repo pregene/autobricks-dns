@@ -8,7 +8,7 @@ pub enum ExitReason {
 }
 
 pub fn run() -> io::Result<ExitReason> {
-    let (configuration_path, configuration) = crate::config::load()?;
+    let (state_path, configuration) = crate::config::load()?;
     println!(
         "DNS service starting bind={} upstream={} records={}",
         configuration.bind,
@@ -18,7 +18,7 @@ pub fn run() -> io::Result<ExitReason> {
         configuration.records.len()
     );
     let restart_requested = Arc::new(AtomicBool::new(false));
-    let control = crate::control::start(configuration_path, Arc::clone(&restart_requested))?;
+    let control = crate::control::start(state_path, Arc::clone(&restart_requested))?;
     let dns_result = crate::dns::run(configuration, Arc::clone(&restart_requested));
     restart_requested.store(true, Ordering::Release);
     let control_result = control

@@ -9,17 +9,17 @@ StartLimitBurst=5
 Type=simple
 User=autobricks-dns
 Group=autobricks-dns
-Environment=AUTOBRICKS_DNS_CONFIG=/etc/autobricks-dns/autobricks-dns.ini
-Environment=AUTOBRICKS_DNS_SOCKET=/run/autobricks-dns/autobricks-dns.sock
-ExecStart=/usr/bin/autobricks-dns
+Environment=AUTOBRICKS_DNS_CONFIG=/etc/autobricks/dns/autobricks-dns.ini
+Environment=AUTOBRICKS_DNS_STATE=/var/lib/autobricks/dns/records.ini
+Environment=AUTOBRICKS_DNS_SOCKET=/var/run/autobricks/dns.sock
+ExecStartPre=+/usr/bin/install -d -o root -g root -m 1777 /var/run/autobricks
+ExecStart=/usr/bin/autobricks/autobricks-dns
 Restart=always
 RestartSec=1
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-RuntimeDirectory=autobricks-dns
-RuntimeDirectoryMode=0750
-ReadWritePaths=/etc/autobricks-dns
+ReadWritePaths=/var/lib/autobricks/dns /var/run/autobricks
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true

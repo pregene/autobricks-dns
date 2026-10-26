@@ -1,16 +1,16 @@
-# Ubuntu 22.04 amd64 and arm64 packages
+# Ubuntu 22.04/24.04 amd64 and arm64 packages
 
 ## Build
 
 From the repository root, with Docker running:
 
 ```sh
-./scripts/build-deb.sh
-./scripts/build-deb.sh arm64
+./scripts/build-package-matrix.sh
 ```
 
-The default architecture is amd64; pass `amd64` or `arm64` explicitly to select
-the target. This builds and tests the Linux executable inside Ubuntu 22.04,
+To build one target, pass the Ubuntu release and architecture explicitly, for
+example `./scripts/build-deb.sh 24.04 arm64`. The matrix command builds and tests
+the Linux executable inside Ubuntu 22.04 and 24.04,
 using Docker emulation when the target differs from the host. The first build downloads
 Ubuntu packages and Rust 1.85.1. Docker and internet access are required.
 Cargo.lock pins Rust dependencies. The Ubuntu base image and apt repositories
@@ -18,8 +18,10 @@ receive updates, so this is a repeatable build procedure, not a guarantee of
 byte-identical output. The output includes:
 
 ```text
-build/autobricks-dns_1.0.0-1_amd64.deb
-build/autobricks-dns_1.0.0-1_arm64.deb
+build/autobricks-dns-1.0.2-ubuntu-22.04-amd64.deb
+build/autobricks-dns-1.0.2-ubuntu-22.04-arm64.deb
+build/autobricks-dns-1.0.2-ubuntu-24.04-amd64.deb
+build/autobricks-dns-1.0.2-ubuntu-24.04-arm64.deb
 build/SHA256SUMS
 ```
 
@@ -35,38 +37,38 @@ or host. The unit is checked with `systemd-analyze verify`.
 
 ## Install and start
 
-On an Ubuntu 22.04 host, select the package matching `dpkg --print-architecture`:
+On an Ubuntu host, select the package matching the OS release and
+`dpkg --print-architecture`:
 
 ```sh
-sudo apt install ./build/autobricks-dns_1.0.0-1_$(dpkg --print-architecture).deb
-sudoedit /etc/autobricks-dns/autobricks-dns.ini
+sudo apt install ./build/autobricks-dns-1.0.2-ubuntu-22.04-$(dpkg --print-architecture).deb
+sudoedit /etc/autobricks/dns/autobricks-dns.ini
 sudo ss -ulpn 'sport = :53'
 sudo systemctl enable --now autobricks-dns.service
 sudo systemctl status autobricks-dns.service
 ```
 
-The package installs `/usr/bin/autobricks-dns`, a systemd unit, and a dedicated
+The package installs `/usr/bin/autobricks/autobricks-dns`, the compatible
+`/usr/bin/autobricks-dns` symbolic link, a systemd unit, and a dedicated
 non-login `autobricks-dns` account. It registers the service but does not enable
 or start it on first installation. Configure the listener, upstream, and local
 records before starting. Ubuntu's existing DNS resolver may already use port
 53; choose an available listener address or explicitly reconfigure that service.
 The package does not alter OS DNS, DHCP, firewall, or other resolver services.
 
-The default INI is copied from `/usr/share/autobricks-dns/default.ini` only if
-the live file is absent. It is managed by the maintainer scripts rather than
-dpkg conffile replacement because the CLI also writes this file. Configuration
-is owned by the service account, with directory mode 0750 and file mode 0600.
+The service configuration is installed under `/etc/autobricks/dns/` and is not
+modified by the CLI. Mutable records are stored in
+`/var/lib/autobricks/dns/records.ini`; upgrades, removal, and purge preserve
+that state. The service account owns the state directory and file.
 
 ```sh
-sudo /usr/bin/autobricks-dns list
-sudo /usr/bin/autobricks-dns add --name cache.example.internal --ip 10.10.0.20 --type A
-sudo /usr/bin/autobricks-dns restart
+sudo /usr/bin/autobricks/autobricks-dns list
+sudo /usr/bin/autobricks/autobricks-dns add --name cache.example.internal --ip 10.10.0.20 --type A
+sudo /usr/bin/autobricks/autobricks-dns restart
 ```
 
-Use the explicit `/usr/bin` path if an earlier manual installation still exists
-in `/usr/local/bin`. A manually installed unit in `/etc/systemd/system` also
-overrides the packaged unit; migrate/remove that manual unit before using the
-package. Package removal does not delete files from a manual installation.
+The public command name remains available through the package-owned symbolic
+link. Package scripts never overwrite an unrelated existing path.
 
 ## Upgrade
 

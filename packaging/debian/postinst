@@ -9,10 +9,16 @@ if [ "$1" = configure ]; then
         adduser --system --ingroup autobricks-dns --no-create-home \
             --home /nonexistent --shell /usr/sbin/nologin autobricks-dns
     fi
-    install -d -o autobricks-dns -g autobricks-dns -m 0750 /etc/autobricks-dns
-    if [ ! -e /etc/autobricks-dns/autobricks-dns.ini ]; then
+    install -d -o root -g autobricks-dns -m 0750 /etc/autobricks/dns
+    install -d -o autobricks-dns -g autobricks-dns -m 0750 /var/lib/autobricks/dns
+    install -d -o root -g root -m 1777 /var/run/autobricks
+    if [ ! -e /etc/autobricks/dns/autobricks-dns.ini ]; then
+        install -o root -g autobricks-dns -m 0640 \
+            /usr/share/autobricks-dns/default.ini /etc/autobricks/dns/autobricks-dns.ini
+    fi
+    if [ ! -e /var/lib/autobricks/dns/records.ini ]; then
         install -o autobricks-dns -g autobricks-dns -m 0600 \
-            /usr/share/autobricks-dns/default.ini /etc/autobricks-dns/autobricks-dns.ini
+            /usr/share/autobricks-dns/default-records.ini /var/lib/autobricks/dns/records.ini
     fi
 fi
 
@@ -27,6 +33,6 @@ if [ "$1" = configure ]; then
     if [ -n "${2:-}" ] && [ -d /run/systemd/system ]; then
         deb-systemd-invoke try-restart autobricks-dns.service || true
     fi
-    echo 'Autobricks DNS: edit /etc/autobricks-dns/autobricks-dns.ini, then run:'
+    echo 'Autobricks DNS: edit /etc/autobricks/dns/autobricks-dns.ini, then run:'
     echo '  sudo systemctl enable --now autobricks-dns.service'
 fi

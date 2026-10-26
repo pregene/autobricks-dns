@@ -4,9 +4,9 @@ set -eu
 #DEBHELPER#
 
 if [ "$1" = purge ]; then
-    rm -f /etc/autobricks-dns/autobricks-dns.ini
-    rmdir /etc/autobricks-dns 2>/dev/null || true
-    rm -f /run/autobricks-dns/autobricks-dns.sock
-    rmdir /run/autobricks-dns 2>/dev/null || true
+    rm -f /etc/autobricks/dns/autobricks-dns.ini
+    rmdir /etc/autobricks/dns 2>/dev/null || true
+    rm -f /var/run/autobricks/dns.sock
+    # Preserve /var/lib/autobricks/dns: it contains administrator-managed records.
     # Retain the system account/group: other files may still refer to their IDs.
 fi

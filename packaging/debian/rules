@@ -12,8 +12,10 @@ override_dh_auto_test:
 	cargo test --locked
 
 override_dh_auto_install:
-	install -D -m 0755 target/release/autobricks-dns debian/autobricks-dns/usr/bin/autobricks-dns
+	install -D -m 0755 target/release/autobricks-dns debian/autobricks-dns/usr/bin/autobricks/autobricks-dns
+	ln -s autobricks/autobricks-dns debian/autobricks-dns/usr/bin/autobricks-dns
 	install -D -m 0644 config/autobricks-dns.ini debian/autobricks-dns/usr/share/autobricks-dns/default.ini
+	install -D -m 0644 config/records.ini debian/autobricks-dns/usr/share/autobricks-dns/default-records.ini
 	install -D -m 0644 packaging/README.md debian/autobricks-dns/usr/share/doc/autobricks-dns/README.Debian
 
 override_dh_installsystemd:

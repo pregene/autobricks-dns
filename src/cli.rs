@@ -25,9 +25,9 @@ pub fn parse() -> io::Result<Mode> {
         "restart" if arguments.len() == 1 => Ok(Mode::Command(Command::Restart)),
         "add" => Ok(Mode::Command(Command::Add(DnsRecord {
             name: required(&arguments, "--name")?,
-            ip: required(&arguments, "--ip")?.parse().map_err(|error| {
-                io::Error::other(format!("invalid --ip value: {error}"))
-            })?,
+            ip: required(&arguments, "--ip")?
+                .parse()
+                .map_err(|error| io::Error::other(format!("invalid --ip value: {error}")))?,
             record_type: record_type(&required(&arguments, "--type")?)?,
         }))),
         "delete" => Ok(Mode::Command(Command::Delete {
@@ -40,10 +40,16 @@ pub fn parse() -> io::Result<Mode> {
 
 fn required(arguments: &[String], flag: &str) -> io::Result<String> {
     let Some(position) = arguments.iter().position(|value| value == flag) else {
-        return Err(io::Error::other(format!("missing required {flag}\n{}", usage())));
+        return Err(io::Error::other(format!(
+            "missing required {flag}\n{}",
+            usage()
+        )));
     };
+    let value_position = position
+        .checked_add(1)
+        .ok_or_else(|| io::Error::other(format!("missing value for {flag}")))?;
     arguments
-        .get(position + 1)
+        .get(value_position)
         .filter(|value| !value.starts_with("--"))
         .cloned()
         .ok_or_else(|| io::Error::other(format!("missing value for {flag}\n{}", usage())))
@@ -83,9 +89,11 @@ Record options:
 
 Environment:
   AUTOBRICKS_DNS_CONFIG  INI file path used when starting the service.
-                        Default: config/autobricks-dns.ini (relative to cwd).
+                        Default: /etc/autobricks/dns/autobricks-dns.ini.
+  AUTOBRICKS_DNS_STATE   Mutable DNS record state path.
+                        Default: /var/lib/autobricks/dns/records.ini.
   AUTOBRICKS_DNS_SOCKET  Unix control socket path for the service and commands.
-                        Default: /run/autobricks-dns/autobricks-dns.sock
+                        Default: /var/run/autobricks/dns.sock
 
 Examples:
   autobricks-dns
@@ -97,7 +105,7 @@ Examples:
 
 Notes:
   Management commands require a running service and access to its control socket.
-  Add/delete save the configuration; restart the service to apply DNS changes.
+  Add/delete save record state; restart the service to apply DNS changes.
   Adding the same name/type/IP is a no-op; a different IP is rejected.
   Without a service manager, start the service manually after restart exits.
   Clients must use this server as their DNS resolver to receive local overrides.

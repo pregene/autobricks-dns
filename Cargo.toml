@@ -1,9 +1,9 @@
 [package]
 name = "autobricks-dns"
-version = "1.0.0"
+version = "1.0.2"
 edition = "2021"
 description = "Standalone DNS service for Autobricks internal names"
-license = "GPL-3.0-only"
+license-file = "LICENSE"
 
 [lints.rust]
 unsafe_code = "deny"
