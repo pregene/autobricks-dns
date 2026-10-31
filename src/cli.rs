@@ -106,7 +106,7 @@ Examples:
 Notes:
   Management commands require a running service and access to its control socket.
   Add/delete save record state; restart the service to apply DNS changes.
-  Adding the same name/type/IP is a no-op; a different IP is rejected.
+  Adding the same name/type/IP is a no-op; a different IP adds another answer.
   Without a service manager, start the service manually after restart exits.
   Clients must use this server as their DNS resolver to receive local overrides.
   See README.md for configuration and INSTALL.md for service installation."#,

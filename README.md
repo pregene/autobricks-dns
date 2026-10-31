@@ -57,15 +57,17 @@ The record-state file contains the local names:
 ```ini
 [api.example.internal]
 A = 10.10.0.10
+A = 10.10.0.11
 AAAA = fd00::10
 ```
 
 `bind` and `upstream` in the service configuration are socket addresses.
 `upstream` is optional. In the record-state file, define each DNS name in its
-own section, using `A = <IPv4>` and/or
-`AAAA = <IPv6>`. A and AAAA are the only supported local record types; MX,
+own section, using `A = <IPv4>` and/or `AAAA = <IPv6>`. Repeat an `A` or
+`AAAA` key to map one name and record type to multiple addresses. A and AAAA
+are the only supported local record types; MX,
 CNAME, TXT, and other record types are not accepted in the configuration. Each
-name and record-type pair must be unique. Record names are normalized to
+name, record-type, and IP tuple must be unique. Record names are normalized to
 lowercase, and only valid DNS labels are accepted. An empty local record set is
 valid and makes the service an upstream DNS forwarder.
 
@@ -88,8 +90,8 @@ target/release/autobricks-dns
 
 ## DNS Behavior
 
-Configured records answer only matching A or AAAA queries, with a 60-second
-TTL. This local response takes precedence over an answer that an upstream DNS
+Configured records answer matching A or AAAA queries with every configured
+address of that type and a 60-second TTL. This local response takes precedence over an answer that an upstream DNS
 server might otherwise return for the same name. A query for a configured name
 but an unconfigured record type returns an empty successful response. A name
 absent from the local records is forwarded unchanged to `upstream`; when no

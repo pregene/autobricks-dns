@@ -18,10 +18,10 @@ receive updates, so this is a repeatable build procedure, not a guarantee of
 byte-identical output. The output includes:
 
 ```text
-build/autobricks-dns-1.0.2-ubuntu-22.04-amd64.deb
-build/autobricks-dns-1.0.2-ubuntu-22.04-arm64.deb
-build/autobricks-dns-1.0.2-ubuntu-24.04-amd64.deb
-build/autobricks-dns-1.0.2-ubuntu-24.04-arm64.deb
+build/autobricks-dns-1.0.3-ubuntu-22.04-amd64.deb
+build/autobricks-dns-1.0.3-ubuntu-22.04-arm64.deb
+build/autobricks-dns-1.0.3-ubuntu-24.04-amd64.deb
+build/autobricks-dns-1.0.3-ubuntu-24.04-arm64.deb
 build/SHA256SUMS
 ```
 
@@ -41,7 +41,7 @@ On an Ubuntu host, select the package matching the OS release and
 `dpkg --print-architecture`:
 
 ```sh
-sudo apt install ./build/autobricks-dns-1.0.2-ubuntu-22.04-$(dpkg --print-architecture).deb
+sudo apt install ./build/autobricks-dns-1.0.3-ubuntu-22.04-$(dpkg --print-architecture).deb
 sudoedit /etc/autobricks/dns/autobricks-dns.ini
 sudo ss -ulpn 'sport = :53'
 sudo systemctl enable --now autobricks-dns.service

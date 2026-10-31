@@ -216,10 +216,10 @@ pub(crate) fn validate_records(records: &mut [DnsRecord]) -> io::Result<()> {
                 record.name
             )));
         }
-        if !names.insert((record.name.clone(), record.record_type)) {
+        if !names.insert((record.name.clone(), record.record_type, record.ip)) {
             return Err(io::Error::other(format!(
-                "duplicate DNS record name and type {} {:?}",
-                record.name, record.record_type
+                "duplicate DNS record name, type, and IP {} {:?} {}",
+                record.name, record.record_type, record.ip
             )));
         }
         if !matches!(
@@ -317,15 +317,37 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_and_rejects_duplicate_records() {
+    fn normalizes_allows_multiple_ips_and_rejects_exact_duplicates() {
         let mut records = vec![record()];
         assert!(validate_records(&mut records).is_ok());
         assert_eq!(
             records.first().map(|record| record.name.as_str()),
             Some("pki.autobricks.internal")
         );
+        let mut second = record();
+        second.ip = IpAddr::V4(Ipv4Addr::new(10, 10, 254, 3));
+        records.push(second);
+        assert!(validate_records(&mut records).is_ok());
         records.push(record());
         assert!(validate_records(&mut records).is_err());
+    }
+
+    #[test]
+    fn repeated_ini_keys_round_trip_multiple_addresses() -> io::Result<()> {
+        let path = fixture(
+            "records.ini",
+            "[pki.autobricks.internal]\nA = 10.10.254.2\nA = 10.10.254.3\nA = 10.10.254.4\n",
+        )?;
+        let mut records = load_records(&path)?;
+        assert_eq!(records.len(), 3);
+        save_records(&path, &mut records)?;
+        let stored = fs::read_to_string(&path)?;
+        assert_eq!(stored.matches("A = ").count(), 3);
+        assert_eq!(load_records(&path)?.len(), 3);
+        fs::remove_dir_all(
+            path.parent()
+                .ok_or_else(|| io::Error::other("missing parent"))?,
+        )
     }
 
     #[test]

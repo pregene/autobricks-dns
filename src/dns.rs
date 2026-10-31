@@ -31,7 +31,11 @@ pub fn run(configuration: DnsConfig, stop: Arc<AtomicBool>) -> io::Result<()> {
         let request = packet
             .get(..size)
             .ok_or_else(|| io::Error::other("DNS request size is invalid"))?;
-        let response = match local_response(request, &configuration.records) {
+        let response = match local_response(
+            request,
+            &configuration.records,
+            configuration.upstream.is_some(),
+        ) {
             Err(error) => {
                 eprintln!("DNS_REQUEST_FAILURE reason={error}");
                 continue;
@@ -68,41 +72,55 @@ fn bind(address: SocketAddr) -> io::Result<UdpSocket> {
     Ok(socket.into())
 }
 
-fn local_response(request: &[u8], records: &[DnsRecord]) -> io::Result<Option<Vec<u8>>> {
+fn local_response(
+    request: &[u8],
+    records: &[DnsRecord],
+    recursion_available: bool,
+) -> io::Result<Option<Vec<u8>>> {
     let (name, question_end, query_type, query_class) = question(request)?;
-    let Some(record) = records
+    let matching = records
         .iter()
-        .find(|record| record.name == name && record.record_type.query_type() == query_type)
-    else {
+        .filter(|record| record.name == name && record.record_type.query_type() == query_type)
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
         if records.iter().any(|record| record.name == name) {
             let mut response = request
                 .get(..question_end)
                 .ok_or_else(|| io::Error::other("DNS question is incomplete"))?
                 .to_vec();
-            set_header(&mut response, false)?;
+            set_header(&mut response, 0, recursion_available)?;
             return Ok(Some(response));
         }
         return Ok(None);
-    };
+    }
     let mut response = request
         .get(..question_end)
         .ok_or_else(|| io::Error::other("DNS question is incomplete"))?
         .to_vec();
-    let has_answer = query_class == 1;
-    set_header(&mut response, has_answer)?;
-    if has_answer {
-        response.extend_from_slice(&[0xc0, 0x0c]);
-        response.extend_from_slice(&record.record_type.query_type().to_be_bytes());
-        response.extend_from_slice(&1_u16.to_be_bytes());
-        response.extend_from_slice(&60_u32.to_be_bytes());
-        match record.ip {
-            std::net::IpAddr::V4(ip) => {
-                response.extend_from_slice(&4_u16.to_be_bytes());
-                response.extend_from_slice(&ip.octets());
+    let answer_count = if query_class == 1 {
+        u16::try_from(matching.len()).map_err(|_| io::Error::other("too many DNS answers"))?
+    } else {
+        0
+    };
+    set_header(&mut response, answer_count, recursion_available)?;
+    if query_class == 1 {
+        for record in matching {
+            response.extend_from_slice(&[0xc0, 0x0c]);
+            response.extend_from_slice(&record.record_type.query_type().to_be_bytes());
+            response.extend_from_slice(&1_u16.to_be_bytes());
+            response.extend_from_slice(&60_u32.to_be_bytes());
+            match record.ip {
+                std::net::IpAddr::V4(ip) => {
+                    response.extend_from_slice(&4_u16.to_be_bytes());
+                    response.extend_from_slice(&ip.octets());
+                }
+                std::net::IpAddr::V6(ip) => {
+                    response.extend_from_slice(&16_u16.to_be_bytes());
+                    response.extend_from_slice(&ip.octets());
+                }
             }
-            std::net::IpAddr::V6(ip) => {
-                response.extend_from_slice(&16_u16.to_be_bytes());
-                response.extend_from_slice(&ip.octets());
+            if response.len() > MAX_PACKET {
+                return Err(io::Error::other("local DNS response exceeds packet limit"));
             }
         }
     }
@@ -173,7 +191,7 @@ fn read_u16(bytes: &[u8], position: usize) -> io::Result<u16> {
     Ok((high << 8) | low)
 }
 
-fn set_header(response: &mut [u8], has_answer: bool) -> io::Result<()> {
+fn set_header(response: &mut [u8], answer_count: u16, recursion_available: bool) -> io::Result<()> {
     let request_flags = *response
         .get(2)
         .ok_or_else(|| io::Error::other("DNS header is incomplete"))?;
@@ -183,8 +201,9 @@ fn set_header(response: &mut [u8], has_answer: bool) -> io::Result<()> {
         0x84 | (request_flags & 0x01);
     *response
         .get_mut(3)
-        .ok_or_else(|| io::Error::other("DNS header is incomplete"))? = 0;
-    let count = if has_answer { 1_u16 } else { 0_u16 }.to_be_bytes();
+        .ok_or_else(|| io::Error::other("DNS header is incomplete"))? =
+        if recursion_available { 0x80 } else { 0 };
+    let count = answer_count.to_be_bytes();
     *response
         .get_mut(6)
         .ok_or_else(|| io::Error::other("DNS header is incomplete"))? = count[0];
@@ -205,7 +224,7 @@ fn negative_response(request: &[u8]) -> io::Result<Vec<u8>> {
         .get(..question_end)
         .ok_or_else(|| io::Error::other("DNS question is incomplete"))?
         .to_vec();
-    set_header(&mut response, false)?;
+    set_header(&mut response, 0, false)?;
     let flags = response
         .get_mut(3)
         .ok_or_else(|| io::Error::other("DNS header is incomplete"))?;
@@ -259,22 +278,42 @@ mod tests {
 
     #[test]
     fn returns_configured_ipv4_for_internal_name() -> io::Result<()> {
-        let response = local_response(&query("pki.autobricks.internal", 1)?, &records())?
+        let response = local_response(&query("pki.autobricks.internal", 1)?, &records(), true)?
             .ok_or_else(|| io::Error::other("configured response is missing"))?;
         assert_eq!(read_u16(&response, 6)?, 1);
+        let response_flags = response
+            .get(3)
+            .ok_or_else(|| io::Error::other("DNS response flags are missing"))?;
+        assert_eq!(response_flags & 0x80, 0x80);
         assert!(response.ends_with(&[10, 10, 254, 2]));
         Ok(())
     }
 
     #[test]
+    fn returns_all_configured_ipv4_addresses_for_one_name() -> io::Result<()> {
+        let mut records = records();
+        records.push(DnsRecord {
+            name: "pki.autobricks.internal".to_owned(),
+            record_type: RecordType::A,
+            ip: IpAddr::V4(Ipv4Addr::new(10, 10, 254, 3)),
+        });
+        let response = local_response(&query("pki.autobricks.internal", 1)?, &records, false)?
+            .ok_or_else(|| io::Error::other("configured response is missing"))?;
+        assert_eq!(read_u16(&response, 6)?, 2);
+        assert!(response.windows(4).any(|value| value == [10, 10, 254, 2]));
+        assert!(response.ends_with(&[10, 10, 254, 3]));
+        Ok(())
+    }
+
+    #[test]
     fn forwards_name_outside_internal_registry() -> io::Result<()> {
-        assert!(local_response(&query("example.com", 1)?, &records())?.is_none());
+        assert!(local_response(&query("example.com", 1)?, &records(), true)?.is_none());
         Ok(())
     }
 
     #[test]
     fn returns_empty_ipv6_answer_for_known_internal_name() -> io::Result<()> {
-        let response = local_response(&query("pki.autobricks.internal", 28)?, &records())?
+        let response = local_response(&query("pki.autobricks.internal", 28)?, &records(), false)?
             .ok_or_else(|| io::Error::other("configured response is missing"))?;
         assert_eq!(read_u16(&response, 6)?, 0);
         Ok(())
@@ -288,7 +327,7 @@ mod tests {
             record_type: RecordType::Aaaa,
             ip: IpAddr::V6(ipv6),
         }];
-        let response = local_response(&query("ipv6.autobricks.internal", 28)?, &records)?
+        let response = local_response(&query("ipv6.autobricks.internal", 28)?, &records, false)?
             .ok_or_else(|| io::Error::other("configured response is missing"))?;
         assert_eq!(read_u16(&response, 6)?, 1);
         assert!(response.ends_with(&ipv6.octets()));

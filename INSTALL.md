@@ -73,6 +73,7 @@ Initial local records belong in `/var/lib/autobricks/dns/records.ini`:
 ```ini
 [api.example.internal]
 A = 10.10.0.10
+A = 10.10.0.11
 AAAA = fd00::10
 ```
 

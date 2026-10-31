@@ -144,10 +144,12 @@ upstream = 8.8.8.8:53
 
 [api.example.internal]
 A = 10.10.0.10
+A = 10.10.0.11
 AAAA = fd00::10
 ```
 
-Names not present in the local records are forwarded to `upstream` when one is
+Repeated `A` or `AAAA` keys map one name and type to multiple addresses, all of
+which are returned in the matching DNS answer. Names not present in the local records are forwarded to `upstream` when one is
 configured. For a locally known name, a query for a type other than `A` or
 `AAAA` receives an empty successful response. This design is intended for
 simple internal-name mapping, not as a replacement for a complete authoritative

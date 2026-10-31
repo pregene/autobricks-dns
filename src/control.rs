@@ -169,18 +169,13 @@ fn apply_inner(state_path: &Path, request: Request, stop: &AtomicBool) -> io::Re
         Request::List => Ok(success("LISTED", Some(records))),
         Request::Add { mut record } => {
             record.name.make_ascii_lowercase();
-            let existing = records.iter().find(|value| {
+            let existing = records.iter().any(|value| {
                 value.name.eq_ignore_ascii_case(&record.name)
                     && value.record_type == record.record_type
+                    && value.ip == record.ip
             });
-            if let Some(existing) = existing {
-                if existing.ip == record.ip {
-                    return Ok(success("UNCHANGED", None));
-                }
-                return Ok(error_response(
-                    "CONFLICT",
-                    "record name and type already exist with a different IP",
-                ));
+            if existing {
+                return Ok(success("UNCHANGED", None));
             }
             records.push(record);
             crate::config::save_records(state_path, &mut records)?;
@@ -280,6 +275,46 @@ mod tests {
         assert!(!crate::config::load_records(&path)?
             .iter()
             .any(|value| value.name == "caddy.autobricks.internal"));
+        fs::remove_dir_all(
+            path.parent()
+                .ok_or_else(|| io::Error::other("fixture parent missing"))?,
+        )
+    }
+
+    #[test]
+    fn add_persists_multiple_ips_for_one_name_and_type() -> io::Result<()> {
+        let path = fixture()?;
+        let stop = AtomicBool::new(false);
+        let second = DnsRecord {
+            name: "PKI.AUTOBRICKS.INTERNAL".to_owned(),
+            record_type: RecordType::A,
+            ip: IpAddr::V4(Ipv4Addr::new(10, 10, 254, 2)),
+        };
+        assert_eq!(
+            apply_inner(
+                &path,
+                Request::Add {
+                    record: second.clone(),
+                },
+                &stop,
+            )?
+            .result,
+            "ADDED"
+        );
+        assert_eq!(
+            apply_inner(&path, Request::Add { record: second }, &stop)?.result,
+            "UNCHANGED"
+        );
+        let records = crate::config::load_records(&path)?;
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| {
+                    record.name == "pki.autobricks.internal" && record.record_type == RecordType::A
+                })
+                .count(),
+            2
+        );
         fs::remove_dir_all(
             path.parent()
                 .ok_or_else(|| io::Error::other("fixture parent missing"))?,
